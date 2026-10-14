@@ -1,12 +1,19 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'path';
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
 
-  // Base path: '/' for dev & custom domain, '/gcc-connect/' for GitHub Pages
+  // Base path: '/' for dev, Vercel, & custom domain, '/gcc-connect/' for GitHub Pages
   base: process.env.VITE_BASE_PATH || '/',
+
+  resolve: {
+    alias: {
+      '@gcc-connect/shared': path.resolve(__dirname, '../shared/src/index.ts'),
+    },
+  },
 
   server: {
     port: 3000,
