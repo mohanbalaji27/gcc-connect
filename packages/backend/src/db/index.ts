@@ -1,11 +1,6 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import pg from 'pg';
 import { newDb } from 'pg-mem';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { INITIAL_SCHEMA_SQL } from './schema.js';
 
 let pool: pg.Pool;
 let isInMemory = false;
@@ -17,14 +12,18 @@ export async function initDatabase(): Promise<pg.Pool> {
 
   const databaseUrl = process.env.DATABASE_URL;
 
-  if (databaseUrl && process.env.NODE_ENV === 'production') {
+  if (databaseUrl && (process.env.NODE_ENV === 'production' || databaseUrl.startsWith('postgres'))) {
+    console.log('[GCC Connect DB] Connecting to PostgreSQL database...');
+    const isLocalhost = databaseUrl.includes('localhost') || databaseUrl.includes('127.0.0.1');
+
     pool = new pg.Pool({
       connectionString: databaseUrl,
-      ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+      // Cloud databases like Neon, Supabase, Render require SSL with self-signed certificate acceptance
+      ssl: isLocalhost ? undefined : { rejectUnauthorized: false },
     });
     isInMemory = false;
   } else {
-    // Zero-dependency local dev / test database powered by pg-mem
+    console.log('[GCC Connect DB] Using in-memory zero-dependency database (pg-mem)...');
     const memDb = newDb({
       autoCreateForeignKeyIndices: true,
     });
@@ -34,16 +33,17 @@ export async function initDatabase(): Promise<pg.Pool> {
     isInMemory = true;
   }
 
-  // Run initial schema migration
-  const migrationPath = path.join(__dirname, 'migrations', '001_initial_schema.sql');
-  if (fs.existsSync(migrationPath)) {
-    const migrationSql = fs.readFileSync(migrationPath, 'utf8');
-    const client = await pool.connect();
-    try {
-      await client.query(migrationSql);
-    } finally {
-      client.release();
-    }
+  // Execute embedded initial schema DDL
+  const client = await pool.connect();
+  try {
+    console.log('[GCC Connect DB] Running database migrations...');
+    await client.query(INITIAL_SCHEMA_SQL);
+    console.log('[GCC Connect DB] Database schema migration completed successfully.');
+  } catch (err: any) {
+    console.error('[GCC Connect DB] Error applying database schema:', err.message);
+    throw err;
+  } finally {
+    client.release();
   }
 
   return pool;
