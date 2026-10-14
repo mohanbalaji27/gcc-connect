@@ -1,0 +1,23 @@
+{
+  "name": "gcc-connect",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/shared",
+    "packages/backend",
+    "packages/web",
+    "packages/mobile"
+  ],
+  "scripts": {
+    "build:shared": "npm --workspace=@gcc-connect/shared run build",
+    "build:backend": "npm --workspace=@gcc-connect/backend run build",
+    "dev:backend": "npm --workspace=@gcc-connect/backend run dev",
+    "dev:web": "npm --workspace=@gcc-connect/web run dev",
+    "seed": "npm --workspace=@gcc-connect/backend run seed",
+    "test": "npm --workspace=@gcc-connect/backend run test",
+    "start": "npm --workspace=@gcc-connect/backend run start"
+  },
+  "dependencies": {
+    "isomorphic-git": "^1.44.2"
+  }
+}
