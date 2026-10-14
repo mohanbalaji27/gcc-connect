@@ -1,0 +1,25 @@
+{
+  "name": "@gcc-connect/mobile",
+  "version": "1.0.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@gcc-connect/shared": "^1.0.0",
+    "expo": "~52.0.0",
+    "expo-camera": "~16.0.0",
+    "expo-constants": "~17.0.0",
+    "expo-status-bar": "~2.0.0",
+    "react": "18.3.1",
+    "react-native": "0.76.5"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.12",
+    "typescript": "^5.5.4"
+  },
+  "private": true
+}

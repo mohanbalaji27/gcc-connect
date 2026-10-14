@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "GCC Connect",
+    "slug": "gcc-connect",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F275A"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.company.gccconnect",
+      "infoPlist": {
+        "NSCameraUsageDescription": "GCC Connect requires camera access to scan physical desk and meeting room QR codes for instant workplace bookings."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F275A"
+      },
+      "package": "com.company.gccconnect",
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow GCC Connect to access your camera to scan physical desk and meeting room QR codes."
+        }
+      ]
+    ]
+  }
+}
