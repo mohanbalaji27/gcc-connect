@@ -1,0 +1,391 @@
+openapi: 3.0.3
+info:
+  title: GCC Connect — Enterprise Workplace Booking Platform API
+  version: 1.0.0
+  description: Authoritative zero-trust backend API for GCC Connect workplace
+    experience, desk/room booking, and QR workflows.
+  contact:
+    name: GCC Connect Engineering & Architecture Team
+    email: architect@gcc.internal
+servers:
+  - url: http://localhost:4000/api
+    description: Local Development Server
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Provide JWT token obtained via /api/auth/dev-login or
+        /api/auth/verify-otp
+    CookieAuth:
+      type: apiKey
+      in: cookie
+      name: gcc_session
+  schemas:
+    UserRole:
+      type: string
+      enum:
+        - EMPLOYEE
+        - TEAM_COORDINATOR
+        - FACILITIES_ADMIN
+        - EVENTS_ADMIN
+        - SUPER_ADMIN
+        - RECEPTION_ADMIN
+    Employee:
+      type: object
+      properties:
+        id:
+          type: string
+        employeeCode:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        department:
+          type: string
+        team:
+          type: string
+        role:
+          $ref: "#/components/schemas/UserRole"
+        isActive:
+          type: boolean
+    DeskBookingRequest:
+      type: object
+      required:
+        - resourceId
+        - date
+      properties:
+        resourceId:
+          type: string
+          example: desk_z001
+        date:
+          type: string
+          format: date
+          example: 2026-10-15
+        isQrOriginated:
+          type: boolean
+          default: false
+    RoomBookingRequest:
+      type: object
+      required:
+        - resourceId
+        - date
+        - startTime
+        - endTime
+      properties:
+        resourceId:
+          type: string
+          example: room_mr8_a
+        date:
+          type: string
+          format: date
+          example: 2026-10-15
+        startTime:
+          type: string
+          example: 10:00
+        endTime:
+          type: string
+          example: 11:30
+        title:
+          type: string
+          example: Robotics Architecture Review
+        attendeesCount:
+          type: integer
+          example: 6
+        isQrOriginated:
+          type: boolean
+          default: false
+    ScanQrRequest:
+      type: object
+      required:
+        - qrData
+      properties:
+        qrData:
+          type: string
+          example: gcc://book/res_dk_z001
+    CreateOneTimeTokenRequest:
+      type: object
+      required:
+        - purpose
+      properties:
+        scopeResourceId:
+          type: string
+        scopeCategory:
+          type: string
+          enum:
+            - DESK
+            - MEETING_ROOM
+        maxRedemptions:
+          type: integer
+          default: 1
+        validHours:
+          type: number
+          default: 24
+        purpose:
+          type: string
+          example: VIP Client Visit - Zimmer Biomet Tour
+    RedeemOneTimeTokenRequest:
+      type: object
+      required:
+        - bearerToken
+      properties:
+        bearerToken:
+          type: string
+        targetResourceId:
+          type: string
+        date:
+          type: string
+          format: date
+security:
+  - BearerAuth: []
+  - CookieAuth: []
+paths:
+  /health:
+    get:
+      summary: Service Health Check
+      responses:
+        "200":
+          description: Service is operational
+  /auth/dev-login:
+    post:
+      summary: Development Mode Login (Seeded Personas)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - employeeCode
+              properties:
+                employeeCode:
+                  type: string
+                  example: EMP-1000
+      responses:
+        "200":
+          description: Session established
+        "401":
+          description: Invalid employee code or account suspended
+  /auth/request-otp:
+    post:
+      summary: Request Corporate Email OTP
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: aarav.sharma@company.com
+      responses:
+        "200":
+          description: OTP dispatched
+  /auth/verify-otp:
+    post:
+      summary: Verify Corporate Email OTP
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - otp
+              properties:
+                email:
+                  type: string
+                  format: email
+                otp:
+                  type: string
+                  example: "123456"
+      responses:
+        "200":
+          description: Session established
+        "400":
+          description: Invalid or expired OTP
+  /auth/me:
+    get:
+      summary: Get Current Authenticated Employee Context
+      responses:
+        "200":
+          description: User context returned
+        "401":
+          description: Unauthorized
+  /resources/floors:
+    get:
+      summary: List Workspace Floors and Zones
+      responses:
+        "200":
+          description: List of floors and zones
+  /resources/floors/{floorId}/desks:
+    get:
+      summary: Get Desk Inventory & Real-Time Availability for Floor
+      parameters:
+        - name: floorId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Desk layout coordinates and availability
+  /resources/rooms:
+    get:
+      summary: Search Meeting Rooms with Filters & Availability
+      parameters:
+        - name: date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: startTime
+          in: query
+          schema:
+            type: string
+        - name: endTime
+          in: query
+          schema:
+            type: string
+        - name: minCapacity
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Meeting rooms list with conflict indicators
+  /bookings/desks:
+    post:
+      summary: Create Workstation Booking (Authoritative Concurrency Checked)
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Unique client request ID for safe retries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeskBookingRequest"
+      responses:
+        "201":
+          description: Booking confirmed
+        "409":
+          description: "Conflict: desk already reserved on this date"
+  /bookings/rooms:
+    post:
+      summary: Create Meeting Room Booking (Time-Overlap Checked)
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoomBookingRequest"
+      responses:
+        "201":
+          description: Room reservation confirmed
+        "409":
+          description: "Conflict: room already reserved for time window"
+  /bookings/my:
+    get:
+      summary: Get Authenticated Employee Bookings
+      responses:
+        "200":
+          description: List of past and upcoming reservations
+  /bookings/{id}/cancel:
+    post:
+      summary: Cancel Reservation (Ownership Enforced)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Booking cancelled
+        "403":
+          description: "Forbidden: cannot cancel another employee’s booking"
+  /bookings/{id}/check-in:
+    post:
+      summary: Check In to Reserved Desk or Room
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Checked in successfully
+  /qr/scan:
+    post:
+      summary: Scan & Resolve QR Code (Physical Opaque ID or Temporary Token)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScanQrRequest"
+      responses:
+        "200":
+          description: Resolved resource metadata or token payload
+        "400":
+          description: Invalid QR payload
+  /qr/tokens:
+    post:
+      summary: Generate One-Time Booking Token (Admin Only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOneTimeTokenRequest"
+      responses:
+        "201":
+          description: Token generated with QR image payload
+  /qr/tokens/redeem:
+    post:
+      summary: Redeem One-Time Booking Token (Atomic Concurrency Protected)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RedeemOneTimeTokenRequest"
+      responses:
+        "200":
+          description: Token redeemed and booking confirmed
+        "400":
+          description: Expired, revoked, or exhausted token
+  /qr/inventory:
+    get:
+      summary: Get Complete QR Inventory for Physical Printing (Admin Only)
+      responses:
+        "200":
+          description: List of physical QR codes with label metadata
