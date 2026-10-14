@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gcc_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: gcc_user
+      POSTGRES_PASSWORD: gcc_secure_password_replace_in_prod
+      POSTGRES_DB: gcc_connect
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../packages/backend/src/db/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gcc_user -d gcc_connect"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: gcc_backend
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://gcc_user:gcc_secure_password_replace_in_prod@postgres:5432/gcc_connect
+      JWT_SECRET: gcc-super-secure-production-jwt-signing-secret-replace-in-env
+      DEV_MODE_ALLOWED: "false"
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    container_name: gcc_web
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

@@ -1,0 +1,34 @@
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+
+# Copy root and package manifests
+COPY package.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY packages/backend/package.json ./packages/backend/
+
+RUN npm install
+
+# Copy source code
+COPY packages/shared/ ./packages/shared/
+COPY packages/backend/ ./packages/backend/
+
+# Build packages
+RUN npm --workspace=@gcc-connect/shared run build
+RUN npm --workspace=@gcc-connect/backend run build
+
+# Runtime stage
+FROM node:22-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=4000
+
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/packages/shared/ ./packages/shared/
+COPY --from=builder /app/packages/backend/ ./packages/backend/
+COPY --from=builder /app/node_modules/ ./node_modules/
+
+EXPOSE 4000
+
+CMD ["node", "packages/backend/dist/index.js"]
