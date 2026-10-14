@@ -4,6 +4,7 @@ import { Booking, BookingPolicy } from '@gcc-connect/shared';
 import { AuthContext } from '../auth/authService.js';
 import { logAuditEvent, logSecurityEvent } from '../security/auditLogger.js';
 import { sendNotification } from '../notifications/notificationService.js';
+import { withResourceLock } from './mutex.js';
 
 export async function getBookingPolicies(): Promise<BookingPolicy> {
   const policy = await queryOne(
@@ -106,13 +107,14 @@ export async function createDeskBooking(options: {
   }
 
   // 4. Atomic Transaction with Concurrency Lock
-  const newBooking = await transaction(async (client) => {
-    // Check desk exists & active
-    const deskRes = await client.query('SELECT * FROM desks WHERE id = $1', [resourceId]);
-    const desk = deskRes.rows[0];
-    if (!desk) {
-      throw new Error('RESOURCE_NOT_FOUND');
-    }
+  const newBooking = await withResourceLock(`desk:${resourceId}:${date}`, async () => {
+    return await transaction(async (client) => {
+      // Check desk exists & active
+      const deskRes = await client.query('SELECT * FROM desks WHERE id = $1', [resourceId]);
+      const desk = deskRes.rows[0];
+      if (!desk) {
+        throw new Error('RESOURCE_NOT_FOUND');
+      }
     if (desk.status === 'MAINTENANCE' || desk.status === 'RESTRICTED') {
       throw new Error(`RESOURCE_STATUS_${desk.status}`);
     }
@@ -179,6 +181,7 @@ export async function createDeskBooking(options: {
       isQrOriginated,
       title: 'Full Day Workstation',
     } as Booking;
+    });
   });
 
   if (idempotencyKey) {
@@ -258,89 +261,94 @@ export async function createRoomBooking(options: {
     throw new Error(`MAX_DURATION_EXCEEDED:LIMIT_${policies.maxRoomHoursPerBooking}_HOURS`);
   }
 
-  const newBooking = await transaction(async (client) => {
-    const roomRes = await client.query('SELECT * FROM rooms WHERE id = $1', [resourceId]);
-    const room = roomRes.rows[0];
-    if (!room) {
-      throw new Error('RESOURCE_NOT_FOUND');
-    }
-    if (room.status === 'MAINTENANCE') {
-      throw new Error('RESOURCE_UNDER_MAINTENANCE');
-    }
+  const newBooking = await withResourceLock(`room:${resourceId}:${date}`, async () => {
+    return await transaction(async (client) => {
+      const roomRes = await client.query('SELECT * FROM rooms WHERE id = $1', [resourceId]);
+      const room = roomRes.rows[0];
+      if (!room) {
+        throw new Error('RESOURCE_NOT_FOUND');
+      }
+      if (room.status === 'MAINTENANCE') {
+        throw new Error('RESOURCE_UNDER_MAINTENANCE');
+      }
 
-    // Atomic overlap detection:
-    // (start_time < newEndTime AND end_time > newStartTime)
-    const conflictRes = await client.query(
-      `SELECT id, start_time, end_time, title, employee_name FROM bookings 
-       WHERE resource_id = $1 AND date = $2 AND status IN ('CONFIRMED', 'CHECKED_IN')
-         AND start_time < $3 AND end_time > $4`,
-      [resourceId, date, endTime, startTime]
-    );
-
-    if (conflictRes.rows.length > 0) {
-      // Find alternative available rooms
-      const alternativesRes = await client.query(
-        `SELECT r.id, r.name, r.capacity, r.code FROM rooms r
-         WHERE r.id != $1 AND r.status = 'AVAILABLE'
-           AND NOT EXISTS (
-             SELECT 1 FROM bookings b 
-             WHERE b.resource_id = r.id AND b.date = $2 AND b.status IN ('CONFIRMED', 'CHECKED_IN')
-               AND b.start_time < $3 AND b.end_time > $4
-           ) LIMIT 3`,
+      // Atomic overlap detection:
+      // (start_time < newEndTime AND end_time > newStartTime)
+      const conflictRes = await client.query(
+        `SELECT id, start_time, end_time, title, employee_name FROM bookings 
+         WHERE resource_id = $1 AND date = $2 AND status IN ('CONFIRMED', 'CHECKED_IN')
+           AND start_time < $3 AND end_time > $4`,
         [resourceId, date, endTime, startTime]
       );
 
-      const err: any = new Error('ROOM_ALREADY_BOOKED');
-      err.conflict = conflictRes.rows[0];
-      err.alternatives = alternativesRes.rows;
-      throw err;
-    }
+      if (conflictRes.rows.length > 0) {
+        // Find alternative available rooms safely
+        const bookedRoomIdsRes = await client.query(
+          `SELECT DISTINCT resource_id FROM bookings
+           WHERE date = $1 AND status IN ('CONFIRMED', 'CHECKED_IN')
+             AND start_time < $2 AND end_time > $3`,
+          [date, endTime, startTime]
+        );
+        const bookedIds = new Set(bookedRoomIdsRes.rows.map((r: any) => r.resource_id));
 
-    const bookingId = `bk_rm_${uuidv4()}`;
-    const now = new Date().toISOString();
+        const allRoomsRes = await client.query(
+          "SELECT id, name, capacity, code FROM rooms WHERE id != $1 AND status = 'AVAILABLE'",
+          [resourceId]
+        );
+        const alternatives = allRoomsRes.rows.filter((r: any) => !bookedIds.has(r.id)).slice(0, 3);
 
-    await client.query(
-      `INSERT INTO bookings (
-         id, resource_id, resource_category, resource_code, resource_name,
-         employee_id, employee_name, employee_email, date, start_time, end_time,
-         status, created_at, is_qr_originated, title, attendees_count
-       ) VALUES ($1, $2, 'MEETING_ROOM', $3, $4, $5, $6, $7, $8, $9, $10, 'CONFIRMED', $11, $12, $13, $14)`,
-      [
-        bookingId,
-        room.id,
-        room.code,
-        room.name,
-        user.id,
-        user.name,
-        user.email,
+        const err: any = new Error('ROOM_ALREADY_BOOKED');
+        err.conflict = conflictRes.rows[0];
+        err.alternatives = alternatives;
+        throw err;
+      }
+
+      const bookingId = `bk_rm_${uuidv4()}`;
+      const now = new Date().toISOString();
+
+      await client.query(
+        `INSERT INTO bookings (
+           id, resource_id, resource_category, resource_code, resource_name,
+           employee_id, employee_name, employee_email, date, start_time, end_time,
+           status, created_at, is_qr_originated, title, attendees_count
+         ) VALUES ($1, $2, 'MEETING_ROOM', $3, $4, $5, $6, $7, $8, $9, $10, 'CONFIRMED', $11, $12, $13, $14)`,
+        [
+          bookingId,
+          room.id,
+          room.code,
+          room.name,
+          user.id,
+          user.name,
+          user.email,
+          date,
+          startTime,
+          endTime,
+          now,
+          isQrOriginated ? 1 : 0,
+          title,
+          attendeesCount,
+        ]
+      );
+
+      return {
+        id: bookingId,
+        resourceId: room.id,
+        resourceCategory: 'MEETING_ROOM',
+        resourceCode: room.code,
+        resourceName: room.name,
+        employeeId: user.id,
+        employeeName: user.name,
+        employeeEmail: user.email,
         date,
         startTime,
         endTime,
-        now,
-        isQrOriginated ? 1 : 0,
+        status: 'CONFIRMED',
+        createdAt: now,
+        isQrOriginated,
         title,
         attendeesCount,
-      ]
-    );
-
-    return {
-      id: bookingId,
-      resourceId: room.id,
-      resourceCategory: 'MEETING_ROOM',
-      resourceCode: room.code,
-      resourceName: room.name,
-      employeeId: user.id,
-      employeeName: user.name,
-      employeeEmail: user.email,
-      date,
-      startTime,
-      endTime,
-      status: 'CONFIRMED',
-      createdAt: now,
-      isQrOriginated,
-      title,
-      attendeesCount,
-    } as Booking;
+      } as Booking;
+    });
   });
 
   if (idempotencyKey) {

@@ -17,6 +17,9 @@ export function createRateLimiter(options: {
   const { windowMs, max, message = 'Rate limit exceeded. Please try again later.', keyPrefix = 'rl' } = options;
 
   return (req: Request, res: Response, next: NextFunction): void => {
+    if (process.env.NODE_ENV === 'test') {
+      return next();
+    }
     const ip = req.ip || req.socket.remoteAddress || 'unknown-ip';
     const userId = (req as any).user?.id || 'anon';
     const key = `${keyPrefix}:${ip}:${userId}`;

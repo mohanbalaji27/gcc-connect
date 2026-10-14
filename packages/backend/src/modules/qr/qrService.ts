@@ -6,6 +6,7 @@ import { OneTimeBookingToken, ResourceCategory } from '@gcc-connect/shared';
 import { AuthContext, hashString } from '../auth/authService.js';
 import { logAuditEvent, logSecurityEvent } from '../security/auditLogger.js';
 import { createDeskBooking, createRoomBooking } from '../bookings/bookingService.js';
+import { withResourceLock } from '../bookings/mutex.js';
 
 export async function resolveQrCode(options: {
   rawQrData: string;
@@ -253,9 +254,10 @@ export async function redeemOneTimeToken(options: {
   const { bearerToken, targetResourceId, date, user, ipAddress } = options;
   const tokenHash = hashString(bearerToken);
 
-  return await transaction(async (client) => {
-    // Row-level lock on the token to prevent concurrent redemption races
-    const tokenRes = await client.query(
+  return await withResourceLock(`token:${tokenHash}`, async () => {
+    return await transaction(async (client) => {
+      // Row-level lock on the token to prevent concurrent redemption races
+      const tokenRes = await client.query(
       'SELECT * FROM one_time_tokens WHERE token_hash = $1',
       [tokenHash]
     );
@@ -352,11 +354,12 @@ export async function redeemOneTimeToken(options: {
       [redemptionId, token.id, user.id, createdBooking.id, nowIso, ipAddress]
     );
 
-    return {
-      success: true,
-      tokenIdentifier: token.token_identifier,
-      booking: createdBooking,
-    };
+      return {
+        success: true,
+        tokenIdentifier: token.token_identifier,
+        booking: createdBooking,
+      };
+    });
   });
 }
 
