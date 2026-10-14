@@ -661,3 +661,140 @@ apiRouter.get(
     res.json({ events });
   }
 );
+
+// -----------------------------------------------------------------------------
+// 7. Admin Map / Zone Management  (real-time seat plan editing)
+// -----------------------------------------------------------------------------
+
+/** GET /admin/resources/zones — list all zones with desk counts */
+apiRouter.get(
+  '/admin/resources/zones',
+  authenticate,
+  requireRole('SUPER_ADMIN', 'FACILITIES_ADMIN'),
+  async (_req, res) => {
+    const zones = await query(
+      `SELECT z.*, COUNT(d.id) as desk_count
+       FROM zones z LEFT JOIN desks d ON d.zone_id = z.id
+       GROUP BY z.id ORDER BY z.name ASC`
+    );
+    res.json({ zones });
+  }
+);
+
+/** PUT /admin/resources/desk-zone — reassign a single desk to a different zone */
+apiRouter.put(
+  '/admin/resources/desk-zone',
+  authenticate,
+  requireRole('SUPER_ADMIN', 'FACILITIES_ADMIN'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { deskId, zoneId, designatedTeam } = req.body;
+    if (!deskId || !zoneId) {
+      res.status(400).json({ error: 'VALIDATION_ERROR', message: 'deskId and zoneId required' });
+      return;
+    }
+
+    const desk = await queryOne('SELECT * FROM desks WHERE id = $1', [deskId]);
+    if (!desk) { res.status(404).json({ error: 'DESK_NOT_FOUND' }); return; }
+
+    const zone = await queryOne('SELECT * FROM zones WHERE id = $1', [zoneId]);
+    if (!zone) { res.status(404).json({ error: 'ZONE_NOT_FOUND' }); return; }
+
+    if (designatedTeam !== undefined) {
+      await query('UPDATE desks SET zone_id = $1, designated_team = $2 WHERE id = $3',
+        [zoneId, designatedTeam, deskId]);
+    } else {
+      await query('UPDATE desks SET zone_id = $1 WHERE id = $2', [zoneId, deskId]);
+    }
+
+    await query(
+      `INSERT INTO audit_logs (id, action, actor_id, actor_email, target_type, target_id, metadata, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        `al_${uuidv4()}`, 'DESK_ZONE_REASSIGNED', req.user!.id, req.user!.email,
+        'DESK', deskId,
+        JSON.stringify({ previousZone: desk.zone_id, newZone: zoneId, designatedTeam }),
+        new Date().toISOString(),
+      ]
+    );
+
+    res.json({ success: true, message: `Desk reassigned to zone ${zone.name}` });
+  }
+);
+
+/** PUT /admin/resources/zone-assignments — bulk reassign desks */
+apiRouter.put(
+  '/admin/resources/zone-assignments',
+  authenticate,
+  requireRole('SUPER_ADMIN', 'FACILITIES_ADMIN'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { assignments } = req.body as {
+      assignments: Array<{ deskCode: string; zoneId: string; designatedTeam?: string }>;
+    };
+
+    if (!Array.isArray(assignments) || assignments.length === 0) {
+      res.status(400).json({ error: 'VALIDATION_ERROR', message: 'assignments array required' });
+      return;
+    }
+
+    let updated = 0;
+    const errors: string[] = [];
+
+    for (const a of assignments) {
+      try {
+        const desk = await queryOne('SELECT * FROM desks WHERE code = $1', [a.deskCode]);
+        if (!desk) { errors.push(`Desk ${a.deskCode} not found`); continue; }
+        const zone = await queryOne('SELECT * FROM zones WHERE id = $1', [a.zoneId]);
+        if (!zone) { errors.push(`Zone ${a.zoneId} not found`); continue; }
+
+        if (a.designatedTeam !== undefined) {
+          await query('UPDATE desks SET zone_id = $1, designated_team = $2 WHERE code = $3',
+            [a.zoneId, a.designatedTeam, a.deskCode]);
+        } else {
+          await query('UPDATE desks SET zone_id = $1 WHERE code = $2', [a.zoneId, a.deskCode]);
+        }
+        updated++;
+      } catch (err: any) {
+        errors.push(`${a.deskCode}: ${err.message}`);
+      }
+    }
+
+    await query(
+      `INSERT INTO audit_logs (id, action, actor_id, actor_email, target_type, target_id, metadata, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        `al_${uuidv4()}`, 'BULK_ZONE_REASSIGNMENT', req.user!.id, req.user!.email,
+        'FLOOR', 'flr_zb_01',
+        JSON.stringify({ updated, errors, assignmentCount: assignments.length }),
+        new Date().toISOString(),
+      ]
+    );
+
+    res.json({ success: true, updated, errors });
+  }
+);
+
+/** PUT /admin/resources/zones/:id — update zone name / color / team */
+apiRouter.put(
+  '/admin/resources/zones/:id',
+  authenticate,
+  requireRole('SUPER_ADMIN', 'FACILITIES_ADMIN'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { id } = req.params;
+    const { name, colorHex, designatedTeam } = req.body;
+
+    const zone = await queryOne('SELECT * FROM zones WHERE id = $1', [id]);
+    if (!zone) { res.status(404).json({ error: 'ZONE_NOT_FOUND' }); return; }
+
+    await query(
+      `UPDATE zones SET
+         name = COALESCE($1, name),
+         color_hex = COALESCE($2, color_hex),
+         designated_team = COALESCE($3, designated_team)
+       WHERE id = $4`,
+      [name || null, colorHex || null, designatedTeam || null, id]
+    );
+
+    res.json({ success: true, message: 'Zone updated' });
+  }
+);
+
