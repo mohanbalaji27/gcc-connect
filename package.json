@@ -9,8 +9,10 @@
     "packages/mobile"
   ],
   "scripts": {
+    "build": "npm --workspace=@gcc-connect/shared run build && npm --workspace=@gcc-connect/backend run build",
     "build:shared": "npm --workspace=@gcc-connect/shared run build",
     "build:backend": "npm --workspace=@gcc-connect/backend run build",
+    "build:web": "npm --workspace=@gcc-connect/web run build",
     "dev:backend": "npm --workspace=@gcc-connect/backend run dev",
     "dev:web": "npm --workspace=@gcc-connect/web run dev",
     "seed": "npm --workspace=@gcc-connect/backend run seed",
